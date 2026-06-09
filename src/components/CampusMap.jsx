@@ -6,7 +6,14 @@ import {
   Circle,
   Popup,
 } from 'react-leaflet'
-import { CAMPUS_CENTER, CAMPUS_BOUNDS, DEFAULT_ZOOM } from '../lib/constants'
+import {
+  CAMPUS_CENTER,
+  CAMPUS_BOUNDS,
+  DEFAULT_ZOOM,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  TILE_MAX_NATIVE_ZOOM,
+} from '../lib/constants'
 import MapInitialCenter from './MapInitialCenter'
 import RouteFitBounds from './RouteFitBounds'
 import MapClickHandler from './MapClickHandler'
@@ -20,23 +27,29 @@ export default function CampusMap({
   walkwayPaths,
   manualMode,
   onManualSelect,
+  onOutOfBounds,
   onRecenter,
 }) {
   return (
     <MapContainer
       center={CAMPUS_CENTER}
       zoom={DEFAULT_ZOOM}
+      minZoom={MIN_ZOOM}
+      maxZoom={MAX_ZOOM}
       maxBounds={CAMPUS_BOUNDS}
       maxBoundsViscosity={0.85}
-      className="campus-map"
+      className={`campus-map${manualMode ? ' manual-mode' : ''}`}
       zoomControl={false}
       scrollWheelZoom
       doubleClickZoom
       touchZoom
+      boxZoom
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        maxNativeZoom={TILE_MAX_NATIVE_ZOOM}
+        maxZoom={MAX_ZOOM}
       />
 
       <MapControls position={position} onRecenter={onRecenter} />
@@ -46,7 +59,11 @@ export default function CampusMap({
         position={position}
         destinationCoords={destination?.coords}
       />
-      <MapClickHandler enabled={manualMode} onSelect={onManualSelect} />
+      <MapClickHandler
+        enabled={manualMode}
+        onSelect={onManualSelect}
+        onOutOfBounds={onOutOfBounds}
+      />
 
       {walkwayPaths.map((path) => (
         <Polyline

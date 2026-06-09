@@ -136,6 +136,29 @@ export function useGeolocation() {
     setError(null)
   }, [clearWatch])
 
+  const resumeGps = useCallback(() => {
+    if (!navigator.geolocation) return false
+
+    clearWatch()
+    modeRef.current = 'gps'
+    smoothRef.current = null
+    setSource(null)
+    setStatus('pending')
+    setError(null)
+    startWatch(HIGH_ACCURACY_OPTIONS, 'gps')
+
+    fallbackTimerRef.current = setTimeout(() => {
+      if (modeRef.current === 'gps' && !smoothRef.current) {
+        clearWatch()
+        modeRef.current = 'network'
+        setStatus('fallback')
+        startWatch(NETWORK_OPTIONS, 'network')
+      }
+    }, 12000)
+
+    return true
+  }, [clearWatch, startWatch])
+
   const recenterAvailable = !!position
 
   return {
@@ -145,6 +168,7 @@ export function useGeolocation() {
     status,
     source,
     setManualPosition,
+    resumeGps,
     recenterAvailable,
   }
 }

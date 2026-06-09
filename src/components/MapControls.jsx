@@ -1,13 +1,11 @@
-import { ZoomControl } from 'react-leaflet'
 import RecenterButton from './RecenterButton'
+import ZoomButtons from './ZoomButtons'
 
 export default function MapControls({ position, onRecenter }) {
   return (
-    <>
-      <ZoomControl position="bottomright" />
-      <div className="map-controls">
-        <RecenterButton position={position} onRecenter={onRecenter} />
-      </div>
-    </>
+    <div className="map-controls">
+      <RecenterButton position={position} onRecenter={onRecenter} />
+      <ZoomButtons />
+    </div>
   )
 }

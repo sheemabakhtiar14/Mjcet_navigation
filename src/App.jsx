@@ -3,6 +3,7 @@ import CampusMap from './components/CampusMap'
 import DestinationSearch from './components/DestinationSearch'
 import VoiceButton from './components/VoiceButton'
 import RouteInfo from './components/RouteInfo'
+import LocationModeToggle from './components/LocationModeToggle'
 import { useCampusData } from './hooks/useCampusData'
 import { useGeolocation } from './hooks/useGeolocation'
 import { useSpeechRecognition } from './hooks/useSpeechRecognition'
@@ -20,6 +21,7 @@ function App() {
     status: locationStatus,
     source: locationSource,
     setManualPosition,
+    resumeGps,
   } = useGeolocation()
 
   const [destination, setDestination] = useState(null)
@@ -27,11 +29,15 @@ function App() {
   const [routeSummary, setRouteSummary] = useState('')
   const [directions, setDirections] = useState([])
   const [navMessage, setNavMessage] = useState('')
+  const [manualPickActive, setManualPickActive] = useState(false)
 
-  const manualMode =
+  const gpsUnavailable =
     locationStatus === 'manual' ||
     locationStatus === 'denied' ||
     !!locationError
+  const usingManualLocation = locationSource === 'manual'
+  const gpsAvailable = typeof navigator !== 'undefined' && !!navigator.geolocation
+  const pickLocationEnabled = gpsUnavailable || manualPickActive
 
   const matchDestination = useMemo(
     () =>
@@ -42,19 +48,19 @@ function App() {
   )
 
   const navigateTo = useCallback(
-    (selectedDestination, { speak = false } = {}) => {
+    (selectedDestination, { speak = false, fromCoords = position } = {}) => {
       if (!campusData) return
 
-      if (!position) {
+      if (!fromCoords) {
         setNavMessage(
-          manualMode
+          pickLocationEnabled
             ? 'Tap the map to set your location, then choose a destination.'
             : 'Waiting for your location before routing.',
         )
         return
       }
 
-      const result = computeRoute(position, selectedDestination, campusData)
+      const result = computeRoute(fromCoords, selectedDestination, campusData)
 
       if (!result.ok) {
         setRouteCoordinates(null)
@@ -74,7 +80,7 @@ function App() {
       setNavMessage(`Route to ${selectedDestination.label}`)
       if (speak) confirmNavigation(selectedDestination.label)
     },
-    [campusData, position, manualMode],
+    [campusData, position, pickLocationEnabled],
   )
 
   const handleDestinationSelect = useCallback(
@@ -101,10 +107,38 @@ function App() {
   const handleManualSelect = useCallback(
     (coords) => {
       setManualPosition(coords)
-      setNavMessage('Manual location set. Select a destination to navigate.')
+      setManualPickActive(false)
+
+      if (destination) {
+        navigateTo(destination, { fromCoords: coords })
+        setNavMessage(`Location updated. Route to ${destination.label}`)
+      } else {
+        setNavMessage('Location set. Select a destination to navigate.')
+      }
     },
-    [setManualPosition],
+    [setManualPosition, destination, navigateTo],
   )
+
+  const handleOutOfBounds = useCallback(() => {
+    setNavMessage('Tap inside the campus area to set your location.')
+  }, [])
+
+  const handleStartManualPick = useCallback(() => {
+    setManualPickActive(true)
+    setNavMessage('Tap the map to set your location.')
+  }, [])
+
+  const handleCancelManualPick = useCallback(() => {
+    setManualPickActive(false)
+    setNavMessage('')
+  }, [])
+
+  const handleResumeGps = useCallback(() => {
+    if (resumeGps()) {
+      setManualPickActive(false)
+      setNavMessage('Resuming GPS location...')
+    }
+  }, [resumeGps])
 
   const { listening, supported, startListening } =
     useSpeechRecognition(handleVoiceResult)
@@ -130,15 +164,20 @@ function App() {
   }
 
   const locationHint =
-    locationStatus === 'pending'
-      ? 'Getting your location...'
-      : locationStatus === 'fallback'
-        ? 'Using network location. For better accuracy, move outdoors.'
-        : manualMode
-          ? 'Tap the map to set your location.'
-          : locationSource === 'manual'
-            ? 'Using manually selected location.'
-            : ''
+    manualPickActive
+      ? 'Tap anywhere on the campus map to set your location.'
+      : locationStatus === 'pending'
+        ? 'Getting your location...'
+        : locationStatus === 'fallback'
+          ? 'Using network location. For better accuracy, move outdoors.'
+          : gpsUnavailable
+            ? 'Tap the map to set your location.'
+            : usingManualLocation
+              ? 'Using manually selected location.'
+              : ''
+
+  const showStatusBanner = locationError || navMessage
+  const showLocationHint = !locationError && locationHint && !navMessage
 
   return (
     <div className="app">
@@ -159,6 +198,15 @@ function App() {
         />
       </div>
 
+      <LocationModeToggle
+        manualPickActive={manualPickActive}
+        usingManualLocation={usingManualLocation}
+        gpsAvailable={gpsAvailable}
+        onStartManualPick={handleStartManualPick}
+        onCancelManualPick={handleCancelManualPick}
+        onResumeGps={handleResumeGps}
+      />
+
       {routeSummary && (
         <RouteInfo
           summary={routeSummary}
@@ -167,13 +215,13 @@ function App() {
         />
       )}
 
-      {(locationError || navMessage) && (
+      {showStatusBanner && (
         <p className="status-banner" role="status">
           {locationError || navMessage}
         </p>
       )}
 
-      {!locationError && locationHint && !navMessage && (
+      {showLocationHint && (
         <p className="status-banner status-banner-muted" role="status">
           {locationHint}
         </p>
@@ -185,8 +233,9 @@ function App() {
         routeCoordinates={routeCoordinates}
         destination={destination}
         walkwayPaths={campusData.paths}
-        manualMode={manualMode || locationSource === 'manual'}
+        manualMode={pickLocationEnabled}
         onManualSelect={handleManualSelect}
+        onOutOfBounds={handleOutOfBounds}
       />
     </div>
   )
