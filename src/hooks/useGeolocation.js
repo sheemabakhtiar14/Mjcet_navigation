@@ -1,36 +1,150 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { smoothCoordinate } from '../lib/geo'
+
+const HIGH_ACCURACY_OPTIONS = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 10000,
+}
+
+const NETWORK_OPTIONS = {
+  enableHighAccuracy: false,
+  maximumAge: 30000,
+  timeout: 15000,
+}
+
+const SMOOTHING_ALPHA = 0.35
+
+function mapPosition(pos, source) {
+  return {
+    coords: [pos.coords.latitude, pos.coords.longitude],
+    accuracy: pos.coords.accuracy,
+    source,
+    timestamp: pos.timestamp,
+  }
+}
 
 export function useGeolocation() {
   const [position, setPosition] = useState(null)
+  const [accuracy, setAccuracy] = useState(null)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState('pending')
+  const [source, setSource] = useState(null)
+
+  const watchIdRef = useRef(null)
+  const smoothRef = useRef(null)
+  const fallbackTimerRef = useRef(null)
+  const modeRef = useRef('gps')
+
+  const clearWatch = useCallback(() => {
+    if (watchIdRef.current != null) {
+      navigator.geolocation.clearWatch(watchIdRef.current)
+      watchIdRef.current = null
+    }
+    if (fallbackTimerRef.current) {
+      clearTimeout(fallbackTimerRef.current)
+      fallbackTimerRef.current = null
+    }
+  }, [])
+
+  const applyPosition = useCallback((nextPosition) => {
+    const smoothed = smoothCoordinate(smoothRef.current, nextPosition.coords, SMOOTHING_ALPHA)
+    smoothRef.current = smoothed
+    setPosition(smoothed)
+    setAccuracy(nextPosition.accuracy ?? null)
+    setSource(nextPosition.source)
+    setStatus('watching')
+    setError(null)
+  }, [])
+
+  const startWatch = useCallback(
+    (options, sourceLabel) => {
+      if (!navigator.geolocation) return
+
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          if (modeRef.current !== 'manual') {
+            applyPosition(mapPosition(pos, sourceLabel))
+          }
+        },
+        (err) => {
+          if (modeRef.current === 'manual') return
+
+          if (err.code === 1) {
+            setError(
+              'Location permission denied. Enable GPS in browser settings or tap the map to set your location manually.',
+            )
+            setStatus('manual')
+            modeRef.current = 'manual'
+            clearWatch()
+            return
+          }
+
+          if (options.enableHighAccuracy && modeRef.current === 'gps') {
+            setStatus('fallback')
+            clearWatch()
+            modeRef.current = 'network'
+            startWatch(NETWORK_OPTIONS, 'network')
+            return
+          }
+
+          setError(
+            'Unable to get your location. Try moving outdoors or tap the map to set your location manually.',
+          )
+          setStatus('manual')
+          modeRef.current = 'manual'
+        },
+        options,
+      )
+    },
+    [applyPosition, clearWatch],
+  )
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setError('Geolocation is not supported on this device.')
-      setStatus('unsupported')
+      setError(
+        'Geolocation is not supported. Tap the map to set your location manually.',
+      )
+      setStatus('manual')
+      modeRef.current = 'manual'
       return undefined
     }
 
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        setPosition([pos.coords.latitude, pos.coords.longitude])
-        setStatus('watching')
-        setError(null)
-      },
-      (err) => {
-        setError(
-          err.code === 1
-            ? 'Location permission denied. Enable GPS to see your position.'
-            : 'Unable to get your location. Try moving outdoors.',
-        )
-        setStatus('denied')
-      },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
-    )
+    modeRef.current = 'gps'
+    startWatch(HIGH_ACCURACY_OPTIONS, 'gps')
 
-    return () => navigator.geolocation.clearWatch(watchId)
-  }, [])
+    fallbackTimerRef.current = setTimeout(() => {
+      if (modeRef.current === 'gps' && !smoothRef.current) {
+        clearWatch()
+        modeRef.current = 'network'
+        setStatus('fallback')
+        startWatch(NETWORK_OPTIONS, 'network')
+      }
+    }, 12000)
 
-  return { position, error, status }
+    return clearWatch
+  }, [clearWatch, startWatch])
+
+  const setManualPosition = useCallback((coords) => {
+    modeRef.current = 'manual'
+    clearWatch()
+    smoothRef.current = coords
+    setPosition(coords)
+    setAccuracy(25)
+    setSource('manual')
+    setStatus('manual')
+    setError(null)
+  }, [clearWatch])
+
+  const recenterAvailable = !!position
+
+  return {
+    position,
+    accuracy,
+    error,
+    status,
+    source,
+    setManualPosition,
+    recenterAvailable,
+  }
 }
