@@ -399,57 +399,6 @@
   height: 22px;
 }
 
-.route-info {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 64px;
-  z-index: 1000;
-  margin: 0;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.route-info-destination {
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.route-info-summary {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #2563eb;
-}
-
-.route-directions {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-  color: #334155;
-}
-
-.route-directions li {
-  margin-bottom: 4px;
-}
-
-.route-step-distance {
-  color: #64748b;
-}
-
-.route-more {
-  list-style: none;
-  margin-left: -18px;
-  color: #64748b;
-  font-style: italic;
-}
-
 .status-banner-muted {
   background: rgba(37, 99, 235, 0.88);
 }

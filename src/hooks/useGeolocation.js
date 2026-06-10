@@ -25,16 +25,25 @@ function mapPosition(pos, source) {
 }
 
 export function useGeolocation() {
+  const geolocationSupported =
+    typeof navigator !== 'undefined' && !!navigator.geolocation
   const [position, setPosition] = useState(null)
   const [accuracy, setAccuracy] = useState(null)
-  const [error, setError] = useState(null)
-  const [status, setStatus] = useState('pending')
+  const [error, setError] = useState(
+    geolocationSupported
+      ? null
+      : 'Geolocation is not supported. Tap the map to set your location manually.',
+  )
+  const [status, setStatus] = useState(
+    geolocationSupported ? 'pending' : 'manual',
+  )
   const [source, setSource] = useState(null)
 
   const watchIdRef = useRef(null)
   const smoothRef = useRef(null)
   const fallbackTimerRef = useRef(null)
-  const modeRef = useRef('gps')
+  const modeRef = useRef(geolocationSupported ? 'gps' : 'manual')
+  const startWatchRef = useRef(null)
 
   const clearWatch = useCallback(() => {
     if (watchIdRef.current != null && navigator.geolocation) {
@@ -88,7 +97,7 @@ export function useGeolocation() {
             setStatus('fallback')
             clearWatch()
             modeRef.current = 'network'
-            startWatch(NETWORK_OPTIONS, 'network')
+            startWatchRef.current?.(NETWORK_OPTIONS, 'network')
             return
           }
 
@@ -105,12 +114,11 @@ export function useGeolocation() {
   )
 
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setError(
-        'Geolocation is not supported. Tap the map to set your location manually.',
-      )
-      setStatus('manual')
-      modeRef.current = 'manual'
+    startWatchRef.current = startWatch
+  }, [startWatch])
+
+  useEffect(() => {
+    if (!geolocationSupported) {
       return undefined
     }
 
@@ -127,7 +135,7 @@ export function useGeolocation() {
     }, 12000)
 
     return clearWatch
-  }, [clearWatch, startWatch])
+  }, [clearWatch, geolocationSupported, startWatch])
 
   const setManualPosition = useCallback(
     (coords) => {
@@ -144,7 +152,7 @@ export function useGeolocation() {
   )
 
   const resumeGps = useCallback(() => {
-    if (!navigator.geolocation) return false
+    if (!geolocationSupported) return false
 
     clearWatch()
     modeRef.current = 'gps'
@@ -164,7 +172,7 @@ export function useGeolocation() {
     }, 12000)
 
     return true
-  }, [clearWatch, startWatch])
+  }, [clearWatch, geolocationSupported, startWatch])
 
   const recenterAvailable = !!position
 

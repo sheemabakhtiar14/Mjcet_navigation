@@ -3,14 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CampusMap from './components/CampusMap'
 import DestinationSearch from './components/DestinationSearch'
 import VoiceButton from './components/VoiceButton'
-import RouteInfo from './components/RouteInfo'
 import LocationModeToggle from './components/LocationModeToggle'
 import { useCampusData } from './hooks/useCampusData'
 import { useGeolocation } from './hooks/useGeolocation'
 import { useSpeechRecognition } from './hooks/useSpeechRecognition'
 import { createDestinationMatcher } from './lib/destinations'
 import { haversineDistance } from './lib/geo'
-import { findNearestNodeId } from './lib/graph'
 import {
   announceArrival,
   announceInstruction,
@@ -19,14 +17,13 @@ import {
   announceReroute,
   confirmNavigation,
 } from './lib/speech'
-import { findShortestPath } from './lib/pathfinding'
+import { computeRoute } from './lib/routing'
 import {
   ARRIVAL_RADIUS_M,
   NAVIGATION_STATES,
   REROUTE_THRESHOLD_M,
   buildRouteProgress,
   buildTurnByTurnSteps,
-  calculateRouteDistance,
   estimateWalkSeconds,
   formatDistance,
   formatDuration,
@@ -83,49 +80,44 @@ function App() {
     (selectedDestination, startPosition) => {
       if (!campusData || !startPosition) return null
 
-      const startId = findNearestNodeId(startPosition, campusData.nodes)
-      const endId = campusData.nodes.has(selectedDestination.id)
-        ? selectedDestination.id
-        : findNearestNodeId(selectedDestination.coords, campusData.nodes)
-
-      const path = findShortestPath(
-        startId,
-        endId,
-        campusData.nodes,
-        campusData.adjacency,
-      )
-
-      if (!path) return null
-
-      let routeCoordinates = selectedDestination.isManual
-        ? [...path.routeCoordinates, selectedDestination.coords]
-        : path.routeCoordinates
-
-      if (routeCoordinates.length < 2) {
-        routeCoordinates = [startPosition, selectedDestination.coords]
-      }
-      const totalDistance = calculateRouteDistance(routeCoordinates)
+      const route = computeRoute(startPosition, selectedDestination, campusData)
+      if (!route.ok) return null
 
       return {
         version: routeVersionRef.current + 1,
-        coordinates: routeCoordinates,
-        totalDistance,
-        walkingSeconds: estimateWalkSeconds(totalDistance),
-        steps: buildTurnByTurnSteps(routeCoordinates, selectedDestination.label),
+        coordinates: route.routeCoordinates,
+        totalDistance: route.distanceM,
+        walkingSeconds: estimateWalkSeconds(route.distanceM),
+        steps: buildTurnByTurnSteps(
+          route.routeCoordinates,
+          selectedDestination.label,
+        ),
       }
     },
     [campusData],
   )
 
+  const clearRouteState = useCallback(() => {
+    routeVersionRef.current += 1
+    setRoutePlan(null)
+    setRouteProgress(null)
+    spokenStepRef.current = null
+  }, [])
+
   const prepareDestination = useCallback(
-    (selectedDestination, { speak = false, fromCoords = position } = {}) => {
+    (
+      selectedDestination,
+      {
+        speak = false,
+        fromCoords = position,
+        keepNavigating = navigationState === NAVIGATION_STATES.ACTIVE,
+      } = {},
+    ) => {
+      clearRouteState()
       setDestination(selectedDestination)
-      setRouteProgress(null)
       setNavigationState(NAVIGATION_STATES.DESTINATION_SELECTED)
-      spokenStepRef.current = null
 
       if (!fromCoords) {
-        setRoutePlan(null)
         setNavMessage(
           pickLocationEnabled
             ? 'Tap the map to set your location, then choose a destination.'
@@ -136,7 +128,6 @@ function App() {
 
       const nextPlan = buildRoutePlan(selectedDestination, fromCoords)
       if (!nextPlan) {
-        setRoutePlan(null)
         setNavMessage('No walking route found to that destination.')
         if (speak) announceNotFound()
         return
@@ -144,17 +135,32 @@ function App() {
 
       routeVersionRef.current = nextPlan.version
       setRoutePlan(nextPlan)
-      setNavigationState(NAVIGATION_STATES.READY)
-      setNavMessage(`Route ready to ${selectedDestination.label}.`)
-      if (speak) confirmNavigation(selectedDestination.label)
+      setNavigationState(
+        keepNavigating ? NAVIGATION_STATES.ACTIVE : NAVIGATION_STATES.READY,
+      )
+      setNavMessage(
+        keepNavigating
+          ? `Navigating to ${selectedDestination.label}.`
+          : `Route ready to ${selectedDestination.label}.`,
+      )
+      if (speak && !keepNavigating) confirmNavigation(selectedDestination.label)
     },
-    [buildRoutePlan, pickLocationEnabled, position],
+    [
+      buildRoutePlan,
+      clearRouteState,
+      navigationState,
+      pickLocationEnabled,
+      position,
+    ],
   )
 
   const rerouteFromCurrentPosition = useCallback(() => {
     if (!destination || !position) return
 
     setNavigationState(NAVIGATION_STATES.REROUTING)
+    setRoutePlan(null)
+    setRouteProgress(null)
+    spokenStepRef.current = null
     setNavMessage('Rerouting from your current location...')
     announceReroute()
 
@@ -166,7 +172,6 @@ function App() {
     }
 
     routeVersionRef.current = nextPlan.version
-    spokenStepRef.current = null
     setRoutePlan(nextPlan)
     setNavigationState(NAVIGATION_STATES.ACTIVE)
   }, [buildRoutePlan, destination, position])
@@ -231,12 +236,10 @@ function App() {
 
   const handleDone = useCallback(() => {
     setDestination(null)
-    setRoutePlan(null)
-    setRouteProgress(null)
+    clearRouteState()
     setNavigationState(NAVIGATION_STATES.IDLE)
     setNavMessage('')
-    spokenStepRef.current = null
-  }, [])
+  }, [clearRouteState])
 
   const handleNavigateAgain = useCallback(() => {
     if (!destination) return
@@ -346,17 +349,6 @@ function App() {
   const progressPercent =
     routeProgress?.progressPercent ??
     (navigationState === NAVIGATION_STATES.REACHED ? 100 : 0)
-  const routeSummary = routePlan
-    ? `${formatDistance(routePlan.totalDistance)} - ${formatDuration(
-        routePlan.walkingSeconds,
-      )}`
-    : ''
-  const routeDirections =
-    routePlan?.steps.map((step) => ({
-      text: step.text,
-      distanceM: step.distance,
-    })) ?? []
-
   if (loading) {
     return (
       <div className="app app-loading">
@@ -419,14 +411,6 @@ function App() {
         onCancelManualPick={handleCancelManualPick}
         onResumeGps={handleResumeGps}
       />
-
-      {routeSummary && (
-        <RouteInfo
-          summary={routeSummary}
-          directions={routeDirections}
-          destinationLabel={destination?.label}
-        />
-      )}
 
       {showStatusBanner && (
         <p className="status-banner" role="status">

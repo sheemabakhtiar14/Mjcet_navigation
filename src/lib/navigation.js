@@ -11,7 +11,7 @@ export const NAVIGATION_STATES = {
 
 export const WALKING_SPEED_MPS = 1.35
 export const ARRIVAL_RADIUS_M = 12
-export const REROUTE_THRESHOLD_M = 24
+export const REROUTE_THRESHOLD_M = 8
 export const STEP_COMPLETION_RADIUS_M = 8
 
 const INSTRUCTION_ARROWS = {
@@ -151,10 +151,14 @@ export function buildRouteProgress(position, coordinates) {
     distanceBeforeSegment += segmentDistance
   }
 
-  const remainingCoordinates = [
-    best.projectedPoint,
-    ...coordinates.slice(best.segmentIndex + 1),
-  ]
+  const remainingCoordinates =
+    haversineDistance(position, best.projectedPoint) > 1
+      ? [
+          position,
+          best.projectedPoint,
+          ...coordinates.slice(best.segmentIndex + 1),
+        ]
+      : [position, ...coordinates.slice(best.segmentIndex + 1)]
   const remainingDistance = routeDistance(remainingCoordinates)
   const progress = totalDistance > 0 ? best.distanceAlong / totalDistance : 1
 

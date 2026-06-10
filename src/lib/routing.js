@@ -4,7 +4,7 @@ import {
   haversineDistance,
 } from './geo'
 import { findShortestPath } from './pathfinding'
-import { snapPositionToNetwork } from './graph'
+import { findNearestNodeId, snapPositionToNetwork } from './graph'
 
 const WALKING_SPEED_MPS = 1.4
 const DEBUG_ROUTING = import.meta.env.DEV
@@ -98,7 +98,9 @@ export function computeRoute(position, destination, campusData) {
   }
 
   const startSnap = snapPositionToNetwork(position, nodes, adjacency)
-  const endId = destination.id
+  const endId = nodes.has(destination.id)
+    ? destination.id
+    : findNearestNodeId(destination.coords, nodes)
 
   if (!startSnap?.nodeId || !nodes.has(endId)) {
     return { ok: false, error: 'Invalid routing nodes.' }
