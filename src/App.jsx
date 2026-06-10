@@ -33,15 +33,6 @@ import {
 } from './lib/navigation'
 import './App.css'
 
-function createManualDestination(coords) {
-  return {
-    id: `manual-${coords[0].toFixed(6)}-${coords[1].toFixed(6)}`,
-    label: 'Selected Map Point',
-    coords,
-    isManual: true,
-  }
-}
-
 function App() {
   const { data: campusData, loading, error: campusError } = useCampusData()
   const {
@@ -52,7 +43,7 @@ function App() {
     source: locationSource,
     setManualPosition,
     resumeGps,
-  } = useGeolocation()
+  } = useGeolocation(campusData?.paths ?? [])
 
   const [destination, setDestination] = useState(null)
   const [routePlan, setRoutePlan] = useState(null)
@@ -179,13 +170,6 @@ function App() {
   const handleDestinationSelect = useCallback(
     (selected) => {
       prepareDestination(selected)
-    },
-    [prepareDestination],
-  )
-
-  const handleMapDestinationSelect = useCallback(
-    (coords) => {
-      prepareDestination(createManualDestination(coords))
     },
     [prepareDestination],
   )
@@ -370,11 +354,11 @@ function App() {
   }
 
   const locationHint = manualPickActive
-    ? 'Tap anywhere on the campus map to set your location.'
+    ? 'Tap the campus map to set your start location.'
     : locationStatus === 'pending'
       ? 'Getting your location...'
       : locationStatus === 'fallback'
-        ? 'Using network location. For better accuracy, move outdoors.'
+        ? 'Waiting for a more accurate GPS fix.'
         : gpsUnavailable
           ? 'Tap the map to set your location.'
           : usingManualLocation
@@ -435,7 +419,6 @@ function App() {
         walkwayPaths={campusData.paths}
         manualMode={pickLocationEnabled}
         onManualSelect={handleManualSelect}
-        onMapSelect={handleMapDestinationSelect}
         onOutOfBounds={handleOutOfBounds}
       />
 

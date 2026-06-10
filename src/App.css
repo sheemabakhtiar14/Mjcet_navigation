@@ -71,12 +71,35 @@
 .destination-search input {
   width: 100%;
   box-sizing: border-box;
-  padding: 12px 14px;
+  padding: 12px 44px 12px 14px;
   border: none;
   border-radius: 12px;
   font-size: 16px;
   background: #ffffff;
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.15);
+}
+
+.destination-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #e2e8f0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.destination-close:hover,
+.destination-close:focus-visible {
+  background: #cbd5e1;
+  outline: none;
 }
 
 .destination-list {

@@ -21,6 +21,11 @@ export default function DestinationSearch({ destinations, value, onChange }) {
     setOpen(false)
   }
 
+  const handleClose = () => {
+    setOpen(false)
+    setQuery('')
+  }
+
   return (
     <div className="destination-search">
       <input
@@ -31,10 +36,23 @@ export default function DestinationSearch({ destinations, value, onChange }) {
           setQuery(event.target.value)
           setOpen(true)
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          setQuery(value?.label ?? query)
+          setOpen(true)
+        }}
         aria-label="Search destination"
         autoComplete="off"
       />
+      {open && (
+        <button
+          className="destination-close"
+          type="button"
+          onClick={handleClose}
+          aria-label="Close destination list"
+        >
+          X
+        </button>
+      )}
 
       {open && filtered.length > 0 && (
         <ul className="destination-list" role="listbox">

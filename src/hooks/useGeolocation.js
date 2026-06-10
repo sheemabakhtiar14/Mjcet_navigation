@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { smoothCoordinate } from '../lib/geo'
+import nearestPointOnLine from '@turf/nearest-point-on-line'
+import { lineString, point } from '@turf/helpers'
+import { bearingBetween, haversineDistance } from '../lib/geo'
 
 const HIGH_ACCURACY_OPTIONS = {
   enableHighAccuracy: true,
@@ -7,13 +9,13 @@ const HIGH_ACCURACY_OPTIONS = {
   timeout: 10000,
 }
 
-const NETWORK_OPTIONS = {
-  enableHighAccuracy: false,
-  maximumAge: 30000,
-  timeout: 15000,
-}
-
-const SMOOTHING_ALPHA = 0.35
+const MAX_ACCEPTED_ACCURACY_M = 15
+const GPS_BUFFER_SIZE = 5
+const MAX_WALKING_SPEED_MPS = 4.5
+const MAX_STATIONARY_JUMP_M = 18
+const SUDDEN_TURN_MIN_DISTANCE_M = 6
+const SUDDEN_TURN_MAX_DELTA_DEG = 135
+const KALMAN_PROCESS_NOISE = 0.00001
 
 function mapPosition(pos, source) {
   return {
@@ -24,7 +26,98 @@ function mapPosition(pos, source) {
   }
 }
 
-export function useGeolocation() {
+function averageCoordinates(samples) {
+  const sums = samples.reduce(
+    (total, sample) => [total[0] + sample.coords[0], total[1] + sample.coords[1]],
+    [0, 0],
+  )
+
+  return [sums[0] / samples.length, sums[1] / samples.length]
+}
+
+function angleDelta(previous, next) {
+  return Math.abs(((next - previous + 540) % 360) - 180)
+}
+
+function createKalmanState(coords, accuracy) {
+  return {
+    lat: coords[0],
+    lng: coords[1],
+    variance: Math.max(accuracy, 1) ** 2,
+  }
+}
+
+function applyKalmanFilter(previous, coords, accuracy) {
+  if (!previous) return createKalmanState(coords, accuracy)
+
+  const measurementVariance = Math.max(accuracy, 1) ** 2
+  const predictedVariance = previous.variance + KALMAN_PROCESS_NOISE
+  const gain = predictedVariance / (predictedVariance + measurementVariance)
+
+  return {
+    lat: previous.lat + gain * (coords[0] - previous.lat),
+    lng: previous.lng + gain * (coords[1] - previous.lng),
+    variance: (1 - gain) * predictedVariance,
+  }
+}
+
+function coordsToLngLat(coords) {
+  return [coords[1], coords[0]]
+}
+
+function snapToNearestPath(coords, walkwayPaths) {
+  if (!coords || !walkwayPaths?.length) return coords
+
+  const gpsPoint = point(coordsToLngLat(coords))
+  let nearest = null
+
+  for (const path of walkwayPaths) {
+    if (!path.coordinates || path.coordinates.length < 2) continue
+
+    const snapped = nearestPointOnLine(
+      lineString(path.coordinates.map(coordsToLngLat)),
+      gpsPoint,
+      { units: 'meters' },
+    )
+
+    if (
+      !nearest ||
+      snapped.properties.dist < nearest.properties.dist
+    ) {
+      nearest = snapped
+    }
+  }
+
+  if (!nearest) return coords
+
+  const [lng, lat] = nearest.geometry.coordinates
+  return [lat, lng]
+}
+
+function isUnrealisticReading(previous, next) {
+  if (!previous) return false
+
+  const distance = haversineDistance(previous.coords, next.coords)
+  const elapsedSeconds = Math.max((next.timestamp - previous.timestamp) / 1000, 1)
+  const speed = distance / elapsedSeconds
+
+  if (distance > MAX_STATIONARY_JUMP_M && speed > MAX_WALKING_SPEED_MPS) {
+    return true
+  }
+
+  if (
+    previous.bearing != null &&
+    distance >= SUDDEN_TURN_MIN_DISTANCE_M &&
+    angleDelta(previous.bearing, bearingBetween(previous.coords, next.coords)) >
+      SUDDEN_TURN_MAX_DELTA_DEG
+  ) {
+    return true
+  }
+
+  return false
+}
+
+export function useGeolocation(walkwayPaths = []) {
   const geolocationSupported =
     typeof navigator !== 'undefined' && !!navigator.geolocation
   const [position, setPosition] = useState(null)
@@ -40,10 +133,18 @@ export function useGeolocation() {
   const [source, setSource] = useState(null)
 
   const watchIdRef = useRef(null)
-  const smoothRef = useRef(null)
+  const stabilizedRef = useRef(null)
+  const rawAcceptedRef = useRef(null)
+  const bufferRef = useRef([])
+  const kalmanRef = useRef(null)
   const fallbackTimerRef = useRef(null)
   const modeRef = useRef(geolocationSupported ? 'gps' : 'manual')
   const startWatchRef = useRef(null)
+  const walkwayPathsRef = useRef(walkwayPaths)
+
+  useEffect(() => {
+    walkwayPathsRef.current = walkwayPaths
+  }, [walkwayPaths])
 
   const clearWatch = useCallback(() => {
     if (watchIdRef.current != null && navigator.geolocation) {
@@ -57,13 +158,38 @@ export function useGeolocation() {
   }, [])
 
   const applyPosition = useCallback((nextPosition) => {
-    const smoothed = smoothCoordinate(
-      smoothRef.current,
-      nextPosition.coords,
-      SMOOTHING_ALPHA,
+    if (
+      nextPosition.source === 'gps' &&
+      nextPosition.accuracy > MAX_ACCEPTED_ACCURACY_M
+    ) {
+      setStatus('watching')
+      return
+    }
+
+    const previousRaw = rawAcceptedRef.current
+    if (isUnrealisticReading(previousRaw, nextPosition)) return
+
+    const bearing =
+      previousRaw && haversineDistance(previousRaw.coords, nextPosition.coords) > 1
+        ? bearingBetween(previousRaw.coords, nextPosition.coords)
+        : previousRaw?.bearing
+
+    const accepted = { ...nextPosition, bearing }
+    rawAcceptedRef.current = accepted
+    bufferRef.current = [...bufferRef.current, accepted].slice(-GPS_BUFFER_SIZE)
+
+    const averaged = averageCoordinates(bufferRef.current)
+    kalmanRef.current = applyKalmanFilter(
+      kalmanRef.current,
+      averaged,
+      nextPosition.accuracy,
     )
-    smoothRef.current = smoothed
-    setPosition(smoothed)
+
+    const filtered = [kalmanRef.current.lat, kalmanRef.current.lng]
+    const snapped = snapToNearestPath(filtered, walkwayPathsRef.current)
+
+    stabilizedRef.current = snapped
+    setPosition(snapped)
     setAccuracy(nextPosition.accuracy ?? null)
     setSource(nextPosition.source)
     setStatus('watching')
@@ -93,14 +219,6 @@ export function useGeolocation() {
             return
           }
 
-          if (options.enableHighAccuracy && modeRef.current === 'gps') {
-            setStatus('fallback')
-            clearWatch()
-            modeRef.current = 'network'
-            startWatchRef.current?.(NETWORK_OPTIONS, 'network')
-            return
-          }
-
           setError(
             'Unable to get your location. Try moving outdoors or tap the map to set your location manually.',
           )
@@ -126,11 +244,10 @@ export function useGeolocation() {
     startWatch(HIGH_ACCURACY_OPTIONS, 'gps')
 
     fallbackTimerRef.current = setTimeout(() => {
-      if (modeRef.current === 'gps' && !smoothRef.current) {
-        clearWatch()
-        modeRef.current = 'network'
-        setStatus('fallback')
-        startWatch(NETWORK_OPTIONS, 'network')
+      if (modeRef.current === 'gps' && !stabilizedRef.current) {
+        setError(
+          'Waiting for a GPS reading within 15 meters. Try moving outdoors for a clearer signal.',
+        )
       }
     }, 12000)
 
@@ -141,7 +258,10 @@ export function useGeolocation() {
     (coords) => {
       modeRef.current = 'manual'
       clearWatch()
-      smoothRef.current = coords
+      stabilizedRef.current = coords
+      rawAcceptedRef.current = null
+      bufferRef.current = []
+      kalmanRef.current = null
       setPosition(coords)
       setAccuracy(25)
       setSource('manual')
@@ -156,18 +276,20 @@ export function useGeolocation() {
 
     clearWatch()
     modeRef.current = 'gps'
-    smoothRef.current = null
+    stabilizedRef.current = null
+    rawAcceptedRef.current = null
+    bufferRef.current = []
+    kalmanRef.current = null
     setSource(null)
     setStatus('pending')
     setError(null)
     startWatch(HIGH_ACCURACY_OPTIONS, 'gps')
 
     fallbackTimerRef.current = setTimeout(() => {
-      if (modeRef.current === 'gps' && !smoothRef.current) {
-        clearWatch()
-        modeRef.current = 'network'
-        setStatus('fallback')
-        startWatch(NETWORK_OPTIONS, 'network')
+      if (modeRef.current === 'gps' && !stabilizedRef.current) {
+        setError(
+          'Waiting for a GPS reading within 15 meters. Try moving outdoors for a clearer signal.',
+        )
       }
     }, 12000)
 

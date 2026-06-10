@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import {
   MapContainer,
   TileLayer,
@@ -19,6 +20,92 @@ import RouteFitBounds from './RouteFitBounds'
 import MapClickHandler from './MapClickHandler'
 import MapControls from './MapControls'
 
+const MARKER_ANIMATION_MS = 450
+
+function interpolatePosition(from, to, progress) {
+  return [
+    from[0] + (to[0] - from[0]) * progress,
+    from[1] + (to[1] - from[1]) * progress,
+  ]
+}
+
+function AnimatedLocationMarker({ position, accuracy, label }) {
+  const [displayPosition, setDisplayPosition] = useState(position)
+  const previousPositionRef = useRef(position)
+  const animationFrameRef = useRef(null)
+
+  useEffect(() => {
+    if (!position) {
+      previousPositionRef.current = null
+      return undefined
+    }
+
+    const from = previousPositionRef.current ?? position
+    const startedAt = performance.now()
+
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+    }
+
+    const animate = (timestamp) => {
+      const progress = Math.min(
+        (timestamp - startedAt) / MARKER_ANIMATION_MS,
+        1,
+      )
+      const eased = 1 - (1 - progress) ** 3
+
+      setDisplayPosition(interpolatePosition(from, position, eased))
+
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(animate)
+        return
+      }
+
+      previousPositionRef.current = position
+    }
+
+    animationFrameRef.current = requestAnimationFrame(animate)
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
+    }
+  }, [position])
+
+  if (!position || !displayPosition) return null
+
+  return (
+    <>
+      {accuracy > 0 && (
+        <Circle
+          center={displayPosition}
+          radius={accuracy}
+          pathOptions={{
+            color: '#2563eb',
+            fillColor: '#3b82f6',
+            fillOpacity: 0.12,
+            weight: 1,
+            opacity: 0.45,
+          }}
+        />
+      )}
+      <CircleMarker
+        center={displayPosition}
+        radius={10}
+        pathOptions={{
+          color: '#ffffff',
+          fillColor: '#2563eb',
+          fillOpacity: 1,
+          weight: 3,
+        }}
+      >
+        <Popup>{label}</Popup>
+      </CircleMarker>
+    </>
+  )
+}
+
 export default function CampusMap({
   position,
   positionLabel = 'You are here',
@@ -28,7 +115,6 @@ export default function CampusMap({
   walkwayPaths,
   manualMode,
   onManualSelect,
-  onMapSelect,
   onOutOfBounds,
   onRecenter,
 }) {
@@ -62,8 +148,8 @@ export default function CampusMap({
         destinationCoords={destination?.coords}
       />
       <MapClickHandler
-        enabled={manualMode || !!onMapSelect}
-        onSelect={manualMode ? onManualSelect : onMapSelect}
+        enabled={manualMode}
+        onSelect={onManualSelect}
         onOutOfBounds={onOutOfBounds}
       />
 
@@ -82,34 +168,11 @@ export default function CampusMap({
         />
       )}
 
-      {position && accuracy > 0 && (
-        <Circle
-          center={position}
-          radius={accuracy}
-          pathOptions={{
-            color: '#2563eb',
-            fillColor: '#3b82f6',
-            fillOpacity: 0.12,
-            weight: 1,
-            opacity: 0.45,
-          }}
-        />
-      )}
-
-      {position && (
-        <CircleMarker
-          center={position}
-          radius={10}
-          pathOptions={{
-            color: '#ffffff',
-            fillColor: '#2563eb',
-            fillOpacity: 1,
-            weight: 3,
-          }}
-        >
-          <Popup>{positionLabel}</Popup>
-        </CircleMarker>
-      )}
+      <AnimatedLocationMarker
+        position={position}
+        accuracy={accuracy}
+        label={positionLabel}
+      />
 
       {destination && (
         <>

@@ -11,7 +11,7 @@ export const NAVIGATION_STATES = {
 
 export const WALKING_SPEED_MPS = 1.35
 export const ARRIVAL_RADIUS_M = 12
-export const REROUTE_THRESHOLD_M = 8
+export const REROUTE_THRESHOLD_M = 10
 export const STEP_COMPLETION_RADIUS_M = 8
 
 const INSTRUCTION_ARROWS = {
