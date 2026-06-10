@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react'
 
 export function useGeolocation() {
+  const hasGeolocation = typeof navigator !== 'undefined' && navigator.geolocation
   const [position, setPosition] = useState(null)
-  const [error, setError] = useState(null)
-  const [status, setStatus] = useState('pending')
+  const [error, setError] = useState(
+    hasGeolocation ? null : 'Geolocation is not supported on this device.',
+  )
+  const [status, setStatus] = useState(hasGeolocation ? 'pending' : 'unsupported')
 
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setError('Geolocation is not supported on this device.')
-      setStatus('unsupported')
-      return undefined
-    }
+    if (!hasGeolocation) return undefined
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
@@ -30,7 +29,7 @@ export function useGeolocation() {
     )
 
     return () => navigator.geolocation.clearWatch(watchId)
-  }, [])
+  }, [hasGeolocation])
 
   return { position, error, status }
 }

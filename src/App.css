@@ -104,6 +104,28 @@
   cursor: pointer;
 }
 
+.location-button {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #ffffff;
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 800;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.15);
+  cursor: pointer;
+}
+
+.location-button.selecting {
+  background: #0f172a;
+  color: #ffffff;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
 .voice-button:disabled {
   background: #94a3b8;
   cursor: not-allowed;
@@ -121,7 +143,7 @@
 
 .status-banner {
   position: absolute;
-  bottom: 16px;
+  top: 106px;
   left: 12px;
   right: 12px;
   z-index: 1000;
@@ -132,6 +154,146 @@
   color: #f8fafc;
   font-size: 14px;
   text-align: center;
+}
+
+.navigation-card {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 16px;
+  z-index: 1000;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.2);
+}
+
+.navigation-card h2 {
+  margin: 2px 0 0;
+  color: #0f172a;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.card-eyebrow {
+  margin: 0;
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.card-subtitle {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.route-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.route-stats span {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.primary-action,
+.secondary-action {
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-action {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.28);
+}
+
+.secondary-action {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.guidance-card {
+  gap: 10px;
+}
+
+.instruction-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.instruction-arrow,
+.success-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 1.45rem;
+  font-weight: 800;
+}
+
+.progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 240ms ease;
+}
+
+.reached-card {
+  justify-items: center;
+  text-align: center;
+  animation: reachedPop 260ms ease-out;
+}
+
+.reached-card .success-icon {
+  background: #16a34a;
+  animation: successPulse 900ms ease-out;
+}
+
+.arrival-destination {
+  margin: 6px 0 0;
+  color: #0f172a;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.arrival-actions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .campus-map {
@@ -147,5 +309,41 @@
   }
   50% {
     transform: scale(1.06);
+  }
+}
+
+@keyframes reachedPop {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes successPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 18px rgba(22, 163, 74, 0);
+  }
+}
+
+@media (min-width: 720px) {
+  .navigation-card {
+    left: 50%;
+    right: auto;
+    width: min(440px, calc(100% - 24px));
+    transform: translateX(-50%);
+  }
+
+  .status-banner {
+    left: 50%;
+    right: auto;
+    width: min(440px, calc(100% - 24px));
+    transform: translateX(-50%);
   }
 }

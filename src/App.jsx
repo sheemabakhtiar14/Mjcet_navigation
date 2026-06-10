@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from 'react'
+/* eslint-disable react-hooks/set-state-in-effect */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CampusMap from './components/CampusMap'
 import DestinationSearch from './components/DestinationSearch'
 import VoiceButton from './components/VoiceButton'
@@ -6,18 +7,55 @@ import { useCampusData } from './hooks/useCampusData'
 import { useGeolocation } from './hooks/useGeolocation'
 import { useSpeechRecognition } from './hooks/useSpeechRecognition'
 import { createDestinationMatcher } from './lib/destinations'
+import { haversineDistance } from './lib/geo'
 import { findNearestNodeId } from './lib/graph'
+import {
+  announceArrival,
+  announceInstruction,
+  announceNavigationStart,
+  announceNotFound,
+  announceReroute,
+  confirmNavigation,
+} from './lib/speech'
 import { findShortestPath } from './lib/pathfinding'
-import { announceNotFound, confirmNavigation } from './lib/speech'
+import {
+  ARRIVAL_RADIUS_M,
+  NAVIGATION_STATES,
+  REROUTE_THRESHOLD_M,
+  buildRouteProgress,
+  buildTurnByTurnSteps,
+  calculateRouteDistance,
+  estimateWalkSeconds,
+  formatDistance,
+  formatDuration,
+  formatEta,
+  getActiveStep,
+  getDestinationBuilding,
+} from './lib/navigation'
 import './App.css'
+
+function createManualDestination(coords) {
+  return {
+    id: `manual-${coords[0].toFixed(6)}-${coords[1].toFixed(6)}`,
+    label: 'Selected Map Point',
+    coords,
+    isManual: true,
+  }
+}
 
 function App() {
   const { data: campusData, loading, error: campusError } = useCampusData()
   const { position, error: locationError, status: locationStatus } =
     useGeolocation()
+  const [manualOrigin, setManualOrigin] = useState(null)
+  const [selectingStartLocation, setSelectingStartLocation] = useState(false)
   const [destination, setDestination] = useState(null)
-  const [routeCoordinates, setRouteCoordinates] = useState(null)
+  const [routePlan, setRoutePlan] = useState(null)
+  const [routeProgress, setRouteProgress] = useState(null)
+  const [navigationState, setNavigationState] = useState(NAVIGATION_STATES.IDLE)
   const [navMessage, setNavMessage] = useState('')
+  const spokenStepRef = useRef(null)
+  const routeVersionRef = useRef(0)
 
   const matchDestination = useMemo(
     () =>
@@ -26,18 +64,17 @@ function App() {
         : () => null,
     [campusData],
   )
+  const routingPosition = manualOrigin ?? position
 
-  const navigateTo = useCallback(
-    (selectedDestination, { speak = false } = {}) => {
-      if (!campusData) return
+  const buildRoutePlan = useCallback(
+    (selectedDestination, startPosition) => {
+      if (!campusData || !startPosition) return null
 
-      if (!position) {
-        setNavMessage('Waiting for your location before routing.')
-        return
-      }
+      const startId = findNearestNodeId(startPosition, campusData.nodes)
+      const endId = campusData.nodes.has(selectedDestination.id)
+        ? selectedDestination.id
+        : findNearestNodeId(selectedDestination.coords, campusData.nodes)
 
-      const startId = findNearestNodeId(position, campusData.nodes)
-      const endId = selectedDestination.id
       const path = findShortestPath(
         startId,
         endId,
@@ -45,26 +82,134 @@ function App() {
         campusData.adjacency,
       )
 
-      if (!path) {
+      if (!path) return null
+
+      let routeCoordinates = selectedDestination.isManual
+        ? [...path.routeCoordinates, selectedDestination.coords]
+        : path.routeCoordinates
+
+      if (routeCoordinates.length < 2) {
+        routeCoordinates = [startPosition, selectedDestination.coords]
+      }
+      const totalDistance = calculateRouteDistance(routeCoordinates)
+
+      return {
+        version: routeVersionRef.current + 1,
+        coordinates: routeCoordinates,
+        totalDistance,
+        walkingSeconds: estimateWalkSeconds(totalDistance),
+        steps: buildTurnByTurnSteps(routeCoordinates, selectedDestination.label),
+      }
+    },
+    [campusData],
+  )
+
+  const prepareDestination = useCallback(
+    (selectedDestination, { speak = false } = {}) => {
+      setDestination(selectedDestination)
+      setRouteProgress(null)
+      setNavigationState(NAVIGATION_STATES.DESTINATION_SELECTED)
+      spokenStepRef.current = null
+
+      if (!routingPosition) {
+        setRoutePlan(null)
+        setNavMessage('Set your location or enable GPS before routing.')
+        return
+      }
+
+      const nextPlan = buildRoutePlan(selectedDestination, routingPosition)
+      if (!nextPlan) {
+        setRoutePlan(null)
         setNavMessage('No walking route found to that destination.')
         if (speak) announceNotFound()
         return
       }
 
-      setDestination(selectedDestination)
-      setRouteCoordinates(path.routeCoordinates)
-      setNavMessage(`Route to ${selectedDestination.label}`)
+      routeVersionRef.current = nextPlan.version
+      setRoutePlan(nextPlan)
+      setNavigationState(NAVIGATION_STATES.READY)
+      setNavMessage(`Route ready to ${selectedDestination.label}.`)
       if (speak) confirmNavigation(selectedDestination.label)
     },
-    [campusData, position],
+    [buildRoutePlan, routingPosition],
   )
+
+  const rerouteFromCurrentPosition = useCallback(() => {
+    if (!destination || !routingPosition) return
+
+    setNavigationState(NAVIGATION_STATES.REROUTING)
+    setNavMessage('Rerouting from your current location...')
+    announceReroute()
+
+    const nextPlan = buildRoutePlan(destination, routingPosition)
+    if (!nextPlan) {
+      setNavMessage('Unable to reroute from your current location.')
+      setNavigationState(NAVIGATION_STATES.ACTIVE)
+      return
+    }
+
+    routeVersionRef.current = nextPlan.version
+    spokenStepRef.current = null
+    setRoutePlan(nextPlan)
+    setNavigationState(NAVIGATION_STATES.ACTIVE)
+  }, [buildRoutePlan, destination, routingPosition])
 
   const handleDestinationSelect = useCallback(
     (selected) => {
-      navigateTo(selected)
+      prepareDestination(selected)
     },
-    [navigateTo],
+    [prepareDestination],
   )
+
+  const handleMapSelect = useCallback(
+    (coords) => {
+      if (selectingStartLocation) {
+        setManualOrigin(coords)
+        setSelectingStartLocation(false)
+        setRouteProgress(null)
+        setNavMessage('Manual start location set.')
+        return
+      }
+
+      prepareDestination(createManualDestination(coords))
+    },
+    [prepareDestination, selectingStartLocation],
+  )
+
+  const handleLocationMode = useCallback(() => {
+    if (manualOrigin) {
+      setManualOrigin(null)
+      setSelectingStartLocation(false)
+      setRouteProgress(null)
+      setNavMessage('Using live GPS location.')
+      return
+    }
+
+    setSelectingStartLocation((isSelecting) => !isSelecting)
+    setNavMessage('Tap the map to set your start location.')
+  }, [manualOrigin])
+
+  const handleStartRoute = useCallback(() => {
+    if (!destination || !routePlan) return
+
+    setNavigationState(NAVIGATION_STATES.ACTIVE)
+    setNavMessage('')
+    announceNavigationStart(destination.label)
+  }, [destination, routePlan])
+
+  const handleDone = useCallback(() => {
+    setDestination(null)
+    setRoutePlan(null)
+    setRouteProgress(null)
+    setNavigationState(NAVIGATION_STATES.IDLE)
+    setNavMessage('')
+    spokenStepRef.current = null
+  }, [])
+
+  const handleNavigateAgain = useCallback(() => {
+    if (!destination) return
+    prepareDestination(destination)
+  }, [destination, prepareDestination])
 
   const handleVoiceResult = useCallback(
     (transcript) => {
@@ -75,13 +220,101 @@ function App() {
         return
       }
 
-      navigateTo(matched, { speak: true })
+      prepareDestination(matched, { speak: true })
     },
-    [matchDestination, navigateTo],
+    [matchDestination, prepareDestination],
   )
+
+  useEffect(() => {
+    if (!routingPosition || !destination) return
+
+    if (
+      navigationState === NAVIGATION_STATES.DESTINATION_SELECTED ||
+      navigationState === NAVIGATION_STATES.READY
+    ) {
+      const updatedPlan =
+        destination && buildRoutePlan(destination, routingPosition)
+      if (updatedPlan) {
+        routeVersionRef.current = updatedPlan.version
+        setRoutePlan(updatedPlan)
+        setNavigationState(NAVIGATION_STATES.READY)
+      }
+    }
+  }, [buildRoutePlan, destination, navigationState, routingPosition])
+
+  useEffect(() => {
+    if (
+      navigationState !== NAVIGATION_STATES.ACTIVE ||
+      !routingPosition ||
+      !routePlan
+    ) {
+      return
+    }
+
+    const progress = buildRouteProgress(routingPosition, routePlan.coordinates)
+    if (!progress) return
+
+    const distanceToDestination = haversineDistance(
+      routingPosition,
+      destination.coords,
+    )
+
+    if (distanceToDestination <= ARRIVAL_RADIUS_M) {
+      setRouteProgress({
+        ...progress,
+        remainingCoordinates: [destination.coords],
+        remainingDistance: 0,
+        progressPercent: 100,
+      })
+      setNavigationState(NAVIGATION_STATES.REACHED)
+      setNavMessage('')
+      announceArrival(destination.label)
+      if (navigator.vibrate) navigator.vibrate([80, 40, 80])
+      return
+    }
+
+    if (progress.distanceFromRoute > REROUTE_THRESHOLD_M) {
+      rerouteFromCurrentPosition()
+      return
+    }
+
+    setRouteProgress(progress)
+  }, [
+    destination,
+    navigationState,
+    rerouteFromCurrentPosition,
+    routingPosition,
+    routePlan,
+  ])
+
+  const activeStep = useMemo(() => {
+    if (!routePlan) return null
+    const distanceAlong = routeProgress?.distanceAlong ?? 0
+    return getActiveStep(routePlan.steps, distanceAlong)
+  }, [routePlan, routeProgress])
+
+  useEffect(() => {
+    if (navigationState !== NAVIGATION_STATES.ACTIVE || !activeStep) return
+    if (spokenStepRef.current === activeStep.id) return
+
+    spokenStepRef.current = activeStep.id
+    announceInstruction(activeStep.text)
+  }, [activeStep, navigationState])
 
   const { listening, supported, startListening } =
     useSpeechRecognition(handleVoiceResult)
+
+  const visibleRouteCoordinates =
+    navigationState === NAVIGATION_STATES.ACTIVE
+      ? routeProgress?.remainingCoordinates ?? routePlan?.coordinates
+      : routePlan?.coordinates
+
+  const remainingDistance =
+    routeProgress?.remainingDistance ?? routePlan?.totalDistance ?? 0
+  const remainingSeconds = estimateWalkSeconds(remainingDistance)
+  const progressPercent =
+    routeProgress?.progressPercent ??
+    (navigationState === NAVIGATION_STATES.REACHED ? 100 : 0)
 
   if (loading) {
     return (
@@ -115,6 +348,17 @@ function App() {
           value={destination}
           onChange={handleDestinationSelect}
         />
+        <button
+          className={`location-button ${selectingStartLocation ? 'selecting' : ''}`}
+          type="button"
+          onClick={handleLocationMode}
+          title={manualOrigin ? 'Use live GPS location' : 'Set start location'}
+          aria-label={
+            manualOrigin ? 'Use live GPS location' : 'Set start location on map'
+          }
+        >
+          {manualOrigin ? 'GPS' : 'Pin'}
+        </button>
         <VoiceButton
           listening={listening}
           supported={supported}
@@ -122,24 +366,110 @@ function App() {
         />
       </div>
 
-      {(locationError || navMessage) && (
+      {((locationError && !manualOrigin) || navMessage) && (
         <p className="status-banner" role="status">
-          {locationError || navMessage}
+          {(locationError && !manualOrigin) || navMessage}
         </p>
       )}
 
-      {locationStatus === 'pending' && !locationError && (
+      {locationStatus === 'pending' && !locationError && !manualOrigin && (
         <p className="status-banner" role="status">
           Getting your location...
         </p>
       )}
 
       <CampusMap
-        position={position}
-        routeCoordinates={routeCoordinates}
+        position={routingPosition}
+        positionLabel={
+          manualOrigin ? 'Pinned start location' : 'You are here'
+        }
+        routeCoordinates={visibleRouteCoordinates}
         destination={destination}
         walkwayPaths={campusData.paths}
+        onMapSelect={handleMapSelect}
       />
+
+      {destination &&
+        routePlan &&
+        (navigationState === NAVIGATION_STATES.READY ||
+          navigationState === NAVIGATION_STATES.DESTINATION_SELECTED) && (
+          <section className="navigation-card" aria-live="polite">
+            <div>
+              <p className="card-eyebrow">Destination Selected</p>
+              <h2>{destination.label}</h2>
+              <p className="card-subtitle">
+                {getDestinationBuilding(destination)}
+              </p>
+            </div>
+            <div className="route-stats">
+              <span>{formatDistance(routePlan.totalDistance)}</span>
+              <span>{formatDuration(routePlan.walkingSeconds)}</span>
+              <span>ETA {formatEta(routePlan.walkingSeconds)}</span>
+            </div>
+            <button
+              className="primary-action"
+              type="button"
+              onClick={handleStartRoute}
+            >
+              Start Route
+            </button>
+          </section>
+        )}
+
+      {navigationState === NAVIGATION_STATES.ACTIVE && routePlan && (
+        <section className="navigation-card guidance-card" aria-live="polite">
+          <div className="instruction-row">
+            <span className="instruction-arrow">{activeStep?.arrow ?? '^'}</span>
+            <div>
+              <p className="card-eyebrow">Now</p>
+              <h2>{activeStep?.text ?? `Continue to ${destination.label}`}</h2>
+            </div>
+          </div>
+          <div className="progress-track" aria-label="Route progress">
+            <span style={{ width: `${progressPercent}%` }} />
+          </div>
+          <div className="route-stats">
+            <span>{formatDistance(remainingDistance)} left</span>
+            <span>{formatDuration(remainingSeconds)}</span>
+            <span>{progressPercent}%</span>
+          </div>
+        </section>
+      )}
+
+      {navigationState === NAVIGATION_STATES.REROUTING && (
+        <section className="navigation-card guidance-card" aria-live="polite">
+          <p className="card-eyebrow">Rerouting</p>
+          <h2>Finding the best walking path...</h2>
+        </section>
+      )}
+
+      {navigationState === NAVIGATION_STATES.REACHED && destination && (
+        <section className="navigation-card reached-card" aria-live="polite">
+          <div className="success-icon" aria-hidden="true">
+            OK
+          </div>
+          <div>
+            <p className="card-eyebrow">Destination Reached</p>
+            <h2>You have arrived at:</h2>
+            <p className="arrival-destination">{destination.label}</p>
+            <p className="card-subtitle">
+              {getDestinationBuilding(destination)}
+            </p>
+          </div>
+          <div className="arrival-actions">
+            <button className="secondary-action" type="button" onClick={handleDone}>
+              Done
+            </button>
+            <button
+              className="primary-action"
+              type="button"
+              onClick={handleNavigateAgain}
+            >
+              Navigate Again
+            </button>
+          </div>
+        </section>
+      )}
     </div>
   )
 }

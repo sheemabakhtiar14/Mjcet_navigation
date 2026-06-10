@@ -7,16 +7,12 @@ const SpeechRecognition =
 
 export function useSpeechRecognition(onResult) {
   const [listening, setListening] = useState(false)
-  const [supported, setSupported] = useState(false)
+  const [supported] = useState(!!SpeechRecognition)
   const onResultRef = useRef(onResult)
 
   useEffect(() => {
     onResultRef.current = onResult
   }, [onResult])
-
-  useEffect(() => {
-    setSupported(!!SpeechRecognition)
-  }, [])
 
   const startListening = useCallback(() => {
     if (!SpeechRecognition) return
