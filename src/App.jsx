@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CampusMap from './components/CampusMap'
 import DestinationSearch from './components/DestinationSearch'
 import VoiceButton from './components/VoiceButton'
+import RouteInfo from './components/RouteInfo'
+import LocationModeToggle from './components/LocationModeToggle'
 import { useCampusData } from './hooks/useCampusData'
 import { useGeolocation } from './hooks/useGeolocation'
 import { useSpeechRecognition } from './hooks/useSpeechRecognition'
@@ -45,17 +47,29 @@ function createManualDestination(coords) {
 
 function App() {
   const { data: campusData, loading, error: campusError } = useCampusData()
-  const { position, error: locationError, status: locationStatus } =
-    useGeolocation()
-  const [manualOrigin, setManualOrigin] = useState(null)
-  const [selectingStartLocation, setSelectingStartLocation] = useState(false)
+  const {
+    position,
+    accuracy,
+    error: locationError,
+    status: locationStatus,
+    source: locationSource,
+    setManualPosition,
+    resumeGps,
+  } = useGeolocation()
+
   const [destination, setDestination] = useState(null)
   const [routePlan, setRoutePlan] = useState(null)
   const [routeProgress, setRouteProgress] = useState(null)
   const [navigationState, setNavigationState] = useState(NAVIGATION_STATES.IDLE)
   const [navMessage, setNavMessage] = useState('')
+  const [manualPickActive, setManualPickActive] = useState(false)
   const spokenStepRef = useRef(null)
   const routeVersionRef = useRef(0)
+
+  const gpsUnavailable = locationStatus === 'manual' || !!locationError
+  const usingManualLocation = locationSource === 'manual'
+  const gpsAvailable = typeof navigator !== 'undefined' && !!navigator.geolocation
+  const pickLocationEnabled = gpsUnavailable || manualPickActive
 
   const matchDestination = useMemo(
     () =>
@@ -64,7 +78,6 @@ function App() {
         : () => null,
     [campusData],
   )
-  const routingPosition = manualOrigin ?? position
 
   const buildRoutePlan = useCallback(
     (selectedDestination, startPosition) => {
@@ -105,19 +118,23 @@ function App() {
   )
 
   const prepareDestination = useCallback(
-    (selectedDestination, { speak = false } = {}) => {
+    (selectedDestination, { speak = false, fromCoords = position } = {}) => {
       setDestination(selectedDestination)
       setRouteProgress(null)
       setNavigationState(NAVIGATION_STATES.DESTINATION_SELECTED)
       spokenStepRef.current = null
 
-      if (!routingPosition) {
+      if (!fromCoords) {
         setRoutePlan(null)
-        setNavMessage('Set your location or enable GPS before routing.')
+        setNavMessage(
+          pickLocationEnabled
+            ? 'Tap the map to set your location, then choose a destination.'
+            : 'Waiting for your location before routing.',
+        )
         return
       }
 
-      const nextPlan = buildRoutePlan(selectedDestination, routingPosition)
+      const nextPlan = buildRoutePlan(selectedDestination, fromCoords)
       if (!nextPlan) {
         setRoutePlan(null)
         setNavMessage('No walking route found to that destination.')
@@ -131,17 +148,17 @@ function App() {
       setNavMessage(`Route ready to ${selectedDestination.label}.`)
       if (speak) confirmNavigation(selectedDestination.label)
     },
-    [buildRoutePlan, routingPosition],
+    [buildRoutePlan, pickLocationEnabled, position],
   )
 
   const rerouteFromCurrentPosition = useCallback(() => {
-    if (!destination || !routingPosition) return
+    if (!destination || !position) return
 
     setNavigationState(NAVIGATION_STATES.REROUTING)
     setNavMessage('Rerouting from your current location...')
     announceReroute()
 
-    const nextPlan = buildRoutePlan(destination, routingPosition)
+    const nextPlan = buildRoutePlan(destination, position)
     if (!nextPlan) {
       setNavMessage('Unable to reroute from your current location.')
       setNavigationState(NAVIGATION_STATES.ACTIVE)
@@ -152,7 +169,7 @@ function App() {
     spokenStepRef.current = null
     setRoutePlan(nextPlan)
     setNavigationState(NAVIGATION_STATES.ACTIVE)
-  }, [buildRoutePlan, destination, routingPosition])
+  }, [buildRoutePlan, destination, position])
 
   const handleDestinationSelect = useCallback(
     (selected) => {
@@ -161,33 +178,48 @@ function App() {
     [prepareDestination],
   )
 
-  const handleMapSelect = useCallback(
+  const handleMapDestinationSelect = useCallback(
     (coords) => {
-      if (selectingStartLocation) {
-        setManualOrigin(coords)
-        setSelectingStartLocation(false)
-        setRouteProgress(null)
-        setNavMessage('Manual start location set.')
-        return
-      }
-
       prepareDestination(createManualDestination(coords))
     },
-    [prepareDestination, selectingStartLocation],
+    [prepareDestination],
   )
 
-  const handleLocationMode = useCallback(() => {
-    if (manualOrigin) {
-      setManualOrigin(null)
-      setSelectingStartLocation(false)
-      setRouteProgress(null)
-      setNavMessage('Using live GPS location.')
-      return
-    }
+  const handleManualSelect = useCallback(
+    (coords) => {
+      setManualPosition(coords)
+      setManualPickActive(false)
 
-    setSelectingStartLocation((isSelecting) => !isSelecting)
-    setNavMessage('Tap the map to set your start location.')
-  }, [manualOrigin])
+      if (destination) {
+        prepareDestination(destination, { fromCoords: coords })
+        setNavMessage(`Location updated. Route to ${destination.label}`)
+      } else {
+        setNavMessage('Location set. Select a destination to navigate.')
+      }
+    },
+    [destination, prepareDestination, setManualPosition],
+  )
+
+  const handleOutOfBounds = useCallback(() => {
+    setNavMessage('Tap inside the campus area to set your location.')
+  }, [])
+
+  const handleStartManualPick = useCallback(() => {
+    setManualPickActive(true)
+    setNavMessage('Tap the map to set your location.')
+  }, [])
+
+  const handleCancelManualPick = useCallback(() => {
+    setManualPickActive(false)
+    setNavMessage('')
+  }, [])
+
+  const handleResumeGps = useCallback(() => {
+    if (resumeGps()) {
+      setManualPickActive(false)
+      setNavMessage('Resuming GPS location...')
+    }
+  }, [resumeGps])
 
   const handleStartRoute = useCallback(() => {
     if (!destination || !routePlan) return
@@ -226,36 +258,35 @@ function App() {
   )
 
   useEffect(() => {
-    if (!routingPosition || !destination) return
+    if (!position || !destination) return
 
     if (
       navigationState === NAVIGATION_STATES.DESTINATION_SELECTED ||
       navigationState === NAVIGATION_STATES.READY
     ) {
-      const updatedPlan =
-        destination && buildRoutePlan(destination, routingPosition)
+      const updatedPlan = buildRoutePlan(destination, position)
       if (updatedPlan) {
         routeVersionRef.current = updatedPlan.version
         setRoutePlan(updatedPlan)
         setNavigationState(NAVIGATION_STATES.READY)
       }
     }
-  }, [buildRoutePlan, destination, navigationState, routingPosition])
+  }, [buildRoutePlan, destination, navigationState, position])
 
   useEffect(() => {
     if (
       navigationState !== NAVIGATION_STATES.ACTIVE ||
-      !routingPosition ||
+      !position ||
       !routePlan
     ) {
       return
     }
 
-    const progress = buildRouteProgress(routingPosition, routePlan.coordinates)
+    const progress = buildRouteProgress(position, routePlan.coordinates)
     if (!progress) return
 
     const distanceToDestination = haversineDistance(
-      routingPosition,
+      position,
       destination.coords,
     )
 
@@ -283,7 +314,7 @@ function App() {
     destination,
     navigationState,
     rerouteFromCurrentPosition,
-    routingPosition,
+    position,
     routePlan,
   ])
 
@@ -315,6 +346,16 @@ function App() {
   const progressPercent =
     routeProgress?.progressPercent ??
     (navigationState === NAVIGATION_STATES.REACHED ? 100 : 0)
+  const routeSummary = routePlan
+    ? `${formatDistance(routePlan.totalDistance)} - ${formatDuration(
+        routePlan.walkingSeconds,
+      )}`
+    : ''
+  const routeDirections =
+    routePlan?.steps.map((step) => ({
+      text: step.text,
+      distanceM: step.distance,
+    })) ?? []
 
   if (loading) {
     return (
@@ -336,6 +377,21 @@ function App() {
     )
   }
 
+  const locationHint = manualPickActive
+    ? 'Tap anywhere on the campus map to set your location.'
+    : locationStatus === 'pending'
+      ? 'Getting your location...'
+      : locationStatus === 'fallback'
+        ? 'Using network location. For better accuracy, move outdoors.'
+        : gpsUnavailable
+          ? 'Tap the map to set your location.'
+          : usingManualLocation
+            ? 'Using manually selected location.'
+            : ''
+
+  const showStatusBanner = locationError || navMessage
+  const showLocationHint = !locationError && locationHint && !navMessage
+
   return (
     <div className="app">
       <header className="app-header">
@@ -348,17 +404,6 @@ function App() {
           value={destination}
           onChange={handleDestinationSelect}
         />
-        <button
-          className={`location-button ${selectingStartLocation ? 'selecting' : ''}`}
-          type="button"
-          onClick={handleLocationMode}
-          title={manualOrigin ? 'Use live GPS location' : 'Set start location'}
-          aria-label={
-            manualOrigin ? 'Use live GPS location' : 'Set start location on map'
-          }
-        >
-          {manualOrigin ? 'GPS' : 'Pin'}
-        </button>
         <VoiceButton
           listening={listening}
           supported={supported}
@@ -366,27 +411,48 @@ function App() {
         />
       </div>
 
-      {((locationError && !manualOrigin) || navMessage) && (
+      <LocationModeToggle
+        manualPickActive={manualPickActive}
+        usingManualLocation={usingManualLocation}
+        gpsAvailable={gpsAvailable}
+        onStartManualPick={handleStartManualPick}
+        onCancelManualPick={handleCancelManualPick}
+        onResumeGps={handleResumeGps}
+      />
+
+      {routeSummary && (
+        <RouteInfo
+          summary={routeSummary}
+          directions={routeDirections}
+          destinationLabel={destination?.label}
+        />
+      )}
+
+      {showStatusBanner && (
         <p className="status-banner" role="status">
-          {(locationError && !manualOrigin) || navMessage}
+          {locationError || navMessage}
         </p>
       )}
 
-      {locationStatus === 'pending' && !locationError && !manualOrigin && (
-        <p className="status-banner" role="status">
-          Getting your location...
+      {showLocationHint && (
+        <p className="status-banner status-banner-muted" role="status">
+          {locationHint}
         </p>
       )}
 
       <CampusMap
-        position={routingPosition}
+        position={position}
         positionLabel={
-          manualOrigin ? 'Pinned start location' : 'You are here'
+          usingManualLocation ? 'Pinned start location' : 'You are here'
         }
+        accuracy={accuracy}
         routeCoordinates={visibleRouteCoordinates}
         destination={destination}
         walkwayPaths={campusData.paths}
-        onMapSelect={handleMapSelect}
+        manualMode={pickLocationEnabled}
+        onManualSelect={handleManualSelect}
+        onMapSelect={handleMapDestinationSelect}
+        onOutOfBounds={handleOutOfBounds}
       />
 
       {destination &&

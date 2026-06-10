@@ -1535,6 +1535,104 @@
           ]
         ]
       }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "from": "junction_6",
+        "to": "ga_hall",
+        "distance_m": 14.5,
+        "type": "path"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [78.443505, 17.428174],
+          [78.443378, 17.428164]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "from": "junction_5",
+        "to": "junction_4",
+        "distance_m": 68.0,
+        "type": "path"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [78.442877, 17.427706],
+          [78.442796, 17.427551],
+          [78.442588, 17.427627],
+          [78.442268, 17.427718]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "from": "law_college",
+        "to": "Ghulam_ahmed",
+        "distance_m": 55.0,
+        "type": "path"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [78.444639, 17.427475],
+          [78.444795, 17.427965]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "from": "parking_main",
+        "to": "Blue_arch",
+        "distance_m": 6.0,
+        "type": "path"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [78.444639, 17.428501],
+          [78.44459, 17.428512]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "from": "mjcet_entrancegate",
+        "to": "garden_ws",
+        "distance_m": 32.0,
+        "type": "path"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [78.441458, 17.427708],
+          [78.441745, 17.427713]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "from": "block_4",
+        "to": "block4_entrance",
+        "distance_m": 1.0,
+        "type": "path"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [78.44284, 17.428042],
+          [78.44284, 17.428042]
+        ]
+      }
     }
   ]
 }
